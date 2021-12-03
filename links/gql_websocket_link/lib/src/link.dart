@@ -214,6 +214,7 @@ class WebSocketLink extends Link {
   Future<void> _connect() async {
     try {
       _connectionStateController.add(connecting);
+      print("Connecting to WebSocket...");
       _channel = await _channelGenerator();
       _reconnectTimer?.cancel();
       _channel!.stream.listen((dynamic message) async {
@@ -236,6 +237,7 @@ class WebSocketLink extends Link {
           _reConnectRequests.clear();
         }
       }, onDone: () {
+        print("WebSocket connection is closed.");
         if (isDisabled) {
           // already disposed
           return;
@@ -245,6 +247,9 @@ class WebSocketLink extends Link {
           _reConnectRequests.clear();
           _reConnectRequests.addAll(_requests);
           if (_reconnectTimer?.isActive != true) {
+            print(
+              "Will attempt to reconnect after ${reconnectInterval.inSeconds} seconds.",
+            );
             _reconnectTimer = Timer.periodic(reconnectInterval, (timer) {
               if (_connectionStateController.value == closed) {
                 _connect();
@@ -266,6 +271,7 @@ class WebSocketLink extends Link {
         await _write(InitOperation(initialPayload))
             .catchError(_messagesController.addError);
       }
+      print("Connected to WebSocket.");
 
       // inactivityTimeout
       if (inactivityTimeout != null) {
@@ -277,13 +283,12 @@ class WebSocketLink extends Link {
             )
             .map<ConnectionKeepAlive>(
                 (message) => message as ConnectionKeepAlive)
-            .timeout(inactivityTimeout!, onTimeout: (_) {
-          print(
-            "Haven't received keep alive message for ${inactivityTimeout!.inSeconds} seconds. Disconnecting..",
-          );
-          _channel!.sink.close(websocket_status.normalClosure);
-          _connectionStateController.add(closed);
-        }).listen(null);
+            .timeout(
+          inactivityTimeout!,
+          onTimeout: (sink) {
+            onInactivityTimeout();
+          },
+        ).listen(null);
       }
     } catch (e) {
       onConnectionLost(
@@ -298,23 +303,27 @@ class WebSocketLink extends Link {
     }
   }
 
+  void onInactivityTimeout() async {
+    print(
+      "No KeepAlive message received after ${inactivityTimeout!.inSeconds} seconds. Closing WebSocket connection.",
+    );
+    await dispose();
+    if (autoReconnect) {
+      _reConnectRequests.clear();
+      _reConnectRequests.addAll(_requests);
+      await _connect();
+    }
+  }
+
   void onConnectionLost([dynamic e]) async {
-    // _channel?.sink.close(websocket_status.goingAway);
     if (e != null) {
       print("There was an error causing connection lost: $e");
     }
     await dispose();
-
-    if (autoReconnect && !_connectionStateController.isClosed) {
-      print(
-        "Scheduling to connect in ${reconnectInterval.inSeconds} seconds...",
-      );
-      _reconnectTimer = Timer(
-        reconnectInterval,
-        _connect,
-      );
-    } else {
-      Timer.run(_connect);
+    if (autoReconnect) {
+      _reConnectRequests.clear();
+      _reConnectRequests.addAll(_requests);
+      await _connect();
     }
   }
 
@@ -406,12 +415,10 @@ class WebSocketLink extends Link {
     _disposedCompleter = Completer();
     _reconnectTimer?.cancel();
     await _keepAliveSubscription?.cancel();
+    print("Closing WebSocketChannel...");
     await _channel?.sink.close(websocket_status.normalClosure);
+    print("Closed WebSocketChannel.");
     _connectionStateController.add(closed);
-    await _connectionStateController.close();
-    await _messagesController.close();
-    // Close current WebSocket channel.
-    await _channel?.sink.close();
     _disposedCompleter!.complete();
   }
 
