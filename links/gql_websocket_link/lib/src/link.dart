@@ -271,7 +271,9 @@ class WebSocketLink extends Link {
       if (inactivityTimeout != null) {
         _keepAliveSubscription = _messagesController.stream
             .where(
-              (GraphQLSocketMessage message) => message is ConnectionKeepAlive,
+              (GraphQLSocketMessage message) =>
+                  message is ConnectionKeepAlive ||
+                  message.type == MessageTypes.connectionKeepAlive,
             )
             .map<ConnectionKeepAlive>(
                 (message) => message as ConnectionKeepAlive)
@@ -280,6 +282,7 @@ class WebSocketLink extends Link {
             "Haven't received keep alive message for ${inactivityTimeout!.inSeconds} seconds. Disconnecting..",
           );
           _channel!.sink.close(websocket_status.normalClosure);
+          _connectionStateController.add(closed);
         }).listen(null);
       }
     } catch (e) {
