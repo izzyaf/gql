@@ -143,7 +143,11 @@ class WebSocketLink extends Link {
     );
     _requests.add(requestWithContext);
 
-    if (_connectionStateController.value == closed) {
+    if (
+        // Connection is closed
+        _connectionStateController.value == closed ||
+            // Channel is disposed
+            _channel == null) {
       await _connect();
     }
     final StreamController<Response> response = StreamController();
@@ -272,19 +276,42 @@ class WebSocketLink extends Link {
             .map<ConnectionKeepAlive>(
                 (message) => message as ConnectionKeepAlive)
             .timeout(inactivityTimeout!, onTimeout: (_) {
+          print(
+            "Haven't received keep alive message for ${inactivityTimeout!.inSeconds} seconds. Disconnecting..",
+          );
           _channel!.sink.close(websocket_status.normalClosure);
         }).listen(null);
       }
     } catch (e) {
-      if (e is LinkException) {
-        rethrow;
-      } else {
-        throw WebSocketLinkServerException(
-          originalException: e,
-          parsedResponse: null,
-          requestMessage: null,
-        );
-      }
+      onConnectionLost(
+        e is LinkException
+            ? e
+            : WebSocketLinkServerException(
+                originalException: e,
+                parsedResponse: null,
+                requestMessage: null,
+              ),
+      );
+    }
+  }
+
+  void onConnectionLost([dynamic e]) async {
+    // _channel?.sink.close(websocket_status.goingAway);
+    if (e != null) {
+      print("There was an error causing connection lost: $e");
+    }
+    await dispose();
+
+    if (autoReconnect && !_connectionStateController.isClosed) {
+      print(
+        "Scheduling to connect in ${reconnectInterval.inSeconds} seconds...",
+      );
+      _reconnectTimer = Timer(
+        reconnectInterval,
+        _connect,
+      );
+    } else {
+      Timer.run(_connect);
     }
   }
 
@@ -380,6 +407,8 @@ class WebSocketLink extends Link {
     _connectionStateController.add(closed);
     await _connectionStateController.close();
     await _messagesController.close();
+    // Close current WebSocket channel.
+    await _channel?.sink.close();
     _disposedCompleter!.complete();
   }
 
@@ -387,7 +416,6 @@ class WebSocketLink extends Link {
   /// Only use this, if you want to disconnect from the current server
   /// in favour of another one. If that's the case,
   /// create a new [WebSocketLink] instance.
-  @override
   Future<void> dispose() async {
     await _close();
     _channel = null;
