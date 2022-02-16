@@ -1,9 +1,4 @@
-##
-
-- Upgrade `rxdart` to `0.27.3`
-- More aggressive retry logic
-
-## 0.3.2
+0.3.2
 
 - Upgrade `gql_exec`.
 
