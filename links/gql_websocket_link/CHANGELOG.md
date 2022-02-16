@@ -2,6 +2,7 @@
 
 - Upgrade `rxdart` to `0.27.3`
 - More aggressive retry logic
+- Temporarily fix `gql-link` at `0.4.0` for compatibility with `graphql: 5.0.1`
 
 ## 0.3.2
 
