@@ -352,8 +352,13 @@ class WebSocketLink extends Link {
   }
 
   Future<GraphQLSocketMessage> _parseSocketMessage(dynamic message) async {
-    final Map<String, dynamic> map =
-        await graphQLSocketMessageDecoder(message)!;
+    final map =
+        await graphQLSocketMessageDecoder(message);
+
+    if (map == null) {
+      return UnknownData(map);
+    }
+
     final String type = (map["type"] ?? "unknown") as String;
     final dynamic payload = map["payload"] ?? <String, dynamic>{};
     final String id = (map["id"] ?? "none") as String;
