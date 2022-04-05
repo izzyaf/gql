@@ -1,4 +1,10 @@
-0.3.2
+0.3.3
+
+- Upgrade `rxdart` to `0.27.3`
+- More aggressive retry logic
+- Temporarily fix dependencies for compatibility with `graphql: 5.0.1`
+
+## 0.3.2
 
 - Upgrade `gql_exec`.
 

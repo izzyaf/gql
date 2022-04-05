@@ -143,7 +143,11 @@ class WebSocketLink extends Link {
     );
     _requests.add(requestWithContext);
 
-    if (_connectionStateController.value == closed) {
+    if (
+        // Connection is closed
+        _connectionStateController.value == closed ||
+            // Channel is disposed
+            _channel == null) {
       await _connect();
     }
     final StreamController<Response> response = StreamController();
@@ -210,6 +214,7 @@ class WebSocketLink extends Link {
   Future<void> _connect() async {
     try {
       _connectionStateController.add(connecting);
+      print("Connecting to WebSocket...");
       _channel = await _channelGenerator();
       _reconnectTimer?.cancel();
       _channel!.stream.listen((dynamic message) async {
@@ -232,6 +237,7 @@ class WebSocketLink extends Link {
           _reConnectRequests.clear();
         }
       }, onDone: () {
+        print("WebSocket connection is closed.");
         if (isDisabled) {
           // already disposed
           return;
@@ -241,6 +247,9 @@ class WebSocketLink extends Link {
           _reConnectRequests.clear();
           _reConnectRequests.addAll(_requests);
           if (_reconnectTimer?.isActive != true) {
+            print(
+              "Will attempt to reconnect after ${reconnectInterval.inSeconds} seconds.",
+            );
             _reconnectTimer = Timer.periodic(reconnectInterval, (timer) {
               if (_connectionStateController.value == closed) {
                 _connect();
@@ -262,29 +271,59 @@ class WebSocketLink extends Link {
         await _write(InitOperation(initialPayload))
             .catchError(_messagesController.addError);
       }
+      print("Connected to WebSocket.");
 
       // inactivityTimeout
       if (inactivityTimeout != null) {
         _keepAliveSubscription = _messagesController.stream
             .where(
-              (GraphQLSocketMessage message) => message is ConnectionKeepAlive,
+              (GraphQLSocketMessage message) =>
+                  message is ConnectionKeepAlive ||
+                  message.type == MessageTypes.connectionKeepAlive,
             )
             .map<ConnectionKeepAlive>(
                 (message) => message as ConnectionKeepAlive)
-            .timeout(inactivityTimeout!, onTimeout: (_) {
-          _channel!.sink.close(websocket_status.normalClosure);
-        }).listen(null);
+            .timeout(
+          inactivityTimeout!,
+          onTimeout: (sink) {
+            onInactivityTimeout();
+          },
+        ).listen(null);
       }
     } catch (e) {
-      if (e is LinkException) {
-        rethrow;
-      } else {
-        throw WebSocketLinkServerException(
-          originalException: e,
-          parsedResponse: null,
-          requestMessage: null,
-        );
-      }
+      onConnectionLost(
+        e is LinkException
+            ? e
+            : WebSocketLinkServerException(
+                originalException: e,
+                parsedResponse: null,
+                requestMessage: null,
+              ),
+      );
+    }
+  }
+
+  void onInactivityTimeout() async {
+    print(
+      "No KeepAlive message received after ${inactivityTimeout!.inSeconds} seconds. Closing WebSocket connection.",
+    );
+    await dispose();
+    if (autoReconnect) {
+      _reConnectRequests.clear();
+      _reConnectRequests.addAll(_requests);
+      await _connect();
+    }
+  }
+
+  void onConnectionLost([dynamic e]) async {
+    if (e != null) {
+      print("There was an error causing connection lost: $e");
+    }
+    await dispose();
+    if (autoReconnect) {
+      _reConnectRequests.clear();
+      _reConnectRequests.addAll(_requests);
+      await _connect();
     }
   }
 
@@ -313,8 +352,13 @@ class WebSocketLink extends Link {
   }
 
   Future<GraphQLSocketMessage> _parseSocketMessage(dynamic message) async {
-    final Map<String, dynamic> map =
-        await graphQLSocketMessageDecoder(message)!;
+    final map =
+        await graphQLSocketMessageDecoder(message);
+
+    if (map == null) {
+      return UnknownData(map);
+    }
+
     final String type = (map["type"] ?? "unknown") as String;
     final dynamic payload = map["payload"] ?? <String, dynamic>{};
     final String id = (map["id"] ?? "none") as String;
@@ -376,10 +420,10 @@ class WebSocketLink extends Link {
     _disposedCompleter = Completer();
     _reconnectTimer?.cancel();
     await _keepAliveSubscription?.cancel();
+    print("Closing WebSocketChannel...");
     await _channel?.sink.close(websocket_status.normalClosure);
+    print("Closed WebSocketChannel.");
     _connectionStateController.add(closed);
-    await _connectionStateController.close();
-    await _messagesController.close();
     _disposedCompleter!.complete();
   }
 
@@ -387,7 +431,6 @@ class WebSocketLink extends Link {
   /// Only use this, if you want to disconnect from the current server
   /// in favour of another one. If that's the case,
   /// create a new [WebSocketLink] instance.
-  @override
   Future<void> dispose() async {
     await _close();
     _channel = null;
